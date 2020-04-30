@@ -10,6 +10,71 @@
 FAPI_CONTEXT *fctx = NULL;
 unsigned maxobjectid = 0;
 
+#include <tss2/tss2_esys.h>
+
+#define check(X) if (X != TSS2_RC_SUCCESS) { LOGE("Error"); return TSS2_FAPI_RC_GENERAL_FAILURE; }
+
+#define FAPI_ESYSBLOB_CONTEXTLOAD 1
+#define FAPI_ESYSBLOB_DESERIALIZE 2
+TSS2_RC Fapi_GetEsysBlobs(FAPI_CONTEXT *fctx, const char *path, uint8_t *type, uint8_t **data, size_t *length) {
+    (void)(path);
+    TSS2_TCTI_CONTEXT *tcti;
+    ESYS_CONTEXT *esys;
+    ESYS_TR esystr;
+    check(Fapi_GetTcti(fctx, &tcti));
+    check(Esys_Initialize(&esys, tcti, NULL));
+    check(Esys_TR_FromTPMPublic(esys, 0x81000001, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, &esystr));
+    check(Esys_TR_Serialize(esys, esystr, data, length));
+    Esys_Finalize(&esys);
+    *type = FAPI_ESYSBLOB_DESERIALIZE;
+    return TSS2_RC_SUCCESS;
+}
+
+static CK_RV get_key(FAPI_CONTEXT *fctx, tpm_ctx *tctx, const char *path, uint32_t *esysHandle, uint32_t *tpmHandle) {
+
+    bool ret;
+    TSS2_RC rc;
+    uint8_t type;
+    uint8_t *data;
+    size_t length;
+
+    rc = Fapi_GetEsysBlobs(fctx, path, &type, &data, &length);
+    if (rc != TSS2_RC_SUCCESS) {
+        LOGE("Cannot get Esys blob for key %s", path);
+        return CKR_GENERAL_ERROR;
+    }
+
+    twist twistdata = twistbin_new(data, length);
+    Fapi_Free(data);
+    if (!twistdata) {
+        return CKR_HOST_MEMORY;
+    }
+
+    switch(type) {
+    case FAPI_ESYSBLOB_CONTEXTLOAD:
+        ret = tpm_contextload_handle(tctx, twistdata, esysHandle);
+        if (!ret) {
+            LOGE("Error on contextload");
+            return CKR_GENERAL_ERROR;
+        }
+        if (tpmHandle) {
+            *tpmHandle = 0;
+        }
+        return CKR_OK;
+    case FAPI_ESYSBLOB_DESERIALIZE:
+        ret = tpm_deserialize_handle(tctx, twistdata, esysHandle, tpmHandle);
+        if (!ret) {
+            LOGE("Error on deserialize");
+            return CKR_GENERAL_ERROR;
+        }
+        return CKR_OK;
+    default:
+        LOGE("Unknown FAPI type for ESYS blob.");
+        twist_free(twistdata);
+        return CKR_GENERAL_ERROR;
+    }
+}
+
 CK_RV backend_fapi_init(void) {
     if (fctx) {
         LOGW("Backend FAPI already initialized.");
@@ -58,6 +123,14 @@ static char * tss_path_from_id(unsigned id, const char *type) {
     sprintf(&path[0], PREFIX "%s-%08x", type, id);
 
     return path;
+}
+
+static char * path_get_parent(const char *path) {
+    char *end = rindex(path, '/');
+    if (!end) {
+        return NULL;
+    }
+    return strndup(path, end - path);
 }
 
 /** Create a new token in fapi backend.
@@ -137,14 +210,18 @@ CK_RV backend_fapi_create_token_seal(token *t, const twist hexwrappingkey,
 
     assert(t->id);
 
-    /* FIXME Manually setting SRK handle here */
-    t->pid = 0x81000001;
-    twist blob;
-    CK_RV rv = tpm_get_existing_primary(t->tctx, &t->pobject.handle, &blob);
+    char * parentpath = path_get_parent(path);
+    free(path);
+    if (!parentpath) {
+        return CKR_HOST_MEMORY;
+    }
+
+    CK_RV rv = get_key(t->fapi.ctx, t->tctx, parentpath, &t->pobject.handle, &t->pid);
+    free(parentpath);
     if (rv != CKR_OK) {
+        LOGE("Error getting parent key");
         return rv;
     }
-    twist_free(blob);
 
     return CKR_OK;
 }
@@ -206,6 +283,18 @@ CK_RV backend_fapi_add_tokens(token *tok, size_t *len) {
         //FIXME
         t->fapi.ctx = fctx;
 
+        char * parentpath = path_get_parent(path);
+        if (!parentpath) {
+            rv = CKR_HOST_MEMORY;
+            goto error;
+        }
+
+        rv = get_key(t->fapi.ctx, t->tctx, parentpath, &t->pobject.handle, &t->pid);
+        free(parentpath);
+        if (rv != CKR_OK) {
+            return rv;
+        }
+
         char *label;
         rc = Fapi_GetDescription(t->fapi.ctx, path, &label);
         if (rc) {
@@ -214,9 +303,6 @@ CK_RV backend_fapi_add_tokens(token *tok, size_t *len) {
         }
         memcpy(&t->label[0], label, strlen(label));
         Fapi_Free(label);
-
-        /* FIXME Manually setting SRK handle here */
-        t->pid = 0x81000001;
 
         uint8_t *appdata;
         size_t appdata_len;
@@ -295,13 +381,6 @@ CK_RV backend_fapi_add_tokens(token *tok, size_t *len) {
             LOGV("\nCurrent next is: %zi / %zi", yaml - appdata, appdata_len);
         }
         Fapi_Free(appdata);
-
-        twist blob;
-        rv = tpm_get_existing_primary(t->tctx, &t->pobject.handle, &blob);
-        if (rv != CKR_OK) {
-            return rv;
-        }
-        twist_free(blob);
 
         t->config.is_initialized = true;
 
