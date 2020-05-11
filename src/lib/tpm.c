@@ -1977,6 +1977,18 @@ static TSS2_RC tpm_get_cc(ESYS_CONTEXT *ectx, TPMS_CAPABILITY_DATA **capabilityD
     return TSS2_RC_SUCCESS;
 }
 
+#define printhandles(ectx) do { \
+    TPMS_CAPABILITY_DATA *__cap; \
+    Esys_GetCapability(ectx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, \
+                       TPM2_CAP_HANDLES, TPM2_TRANSIENT_FIRST, TPM2_MAX_CAP_HANDLES, NULL, &__cap); \
+    LOGE("XXX handles transient (%s,%i): %i", __func__, __LINE__ , __cap->data.handles.count); \
+    Esys_Free(__cap); \
+    Esys_GetCapability(ectx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, \
+                       TPM2_CAP_HANDLES, TPM2_LOADED_SESSION_FIRST, TPM2_MAX_CAP_HANDLES, NULL, &__cap); \
+    LOGE("XXX handles session (%s,%i): %i", __func__, __LINE__ , __cap->data.handles.count); \
+    Esys_Free(__cap); \
+} while (0);
+
 static TSS2_RC create_loaded(
         ESYS_CONTEXT *ectx,
         ESYS_TR parent,
@@ -2012,6 +2024,7 @@ static TSS2_RC create_loaded(
         }
         check_cc = false;
     }
+printhandles(ectx);
 
     if (out_handle && use_create_loaded) {
 

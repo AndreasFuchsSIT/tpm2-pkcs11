@@ -7,6 +7,30 @@
 #include "utils.h"
 #include <tss2/tss2_fapi.h>
 
+
+#include <tss2/tss2_esys.h>
+struct tpm_ctx {
+    TSS2_TCTI_CONTEXT *tcti_ctx;
+    ESYS_CONTEXT *esys_ctx;
+    bool esapi_manage_session_flags;
+    ESYS_TR hmac_session;
+    TPMA_SESSION old_flags;
+    TPMA_SESSION original_flags;
+};
+#define printhandles(X) do { \
+    TPMS_CAPABILITY_DATA *__cap; \
+    Esys_GetCapability(X->tctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, \
+                       TPM2_CAP_HANDLES, TPM2_TRANSIENT_FIRST, TPM2_MAX_CAP_HANDLES, NULL, &__cap); \
+    LOGE("XXX handles transient (%s,%i): %i", __func__, __LINE__ , __cap->data.handles.count); \
+    Esys_Free(__cap); \
+    Esys_GetCapability(X->tctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, \
+                       TPM2_CAP_HANDLES, TPM2_LOADED_SESSION_FIRST, TPM2_MAX_CAP_HANDLES, NULL, &__cap); \
+    LOGE("XXX handles session (%s,%i): %i", __func__, __LINE__ , __cap->data.handles.count); \
+    Esys_Free(__cap); \
+} while (0);
+
+
+
 FAPI_CONTEXT *fctx = NULL;
 unsigned maxobjectid = 0;
 
@@ -134,6 +158,8 @@ CK_RV backend_fapi_create_token_seal(token *t, const twist hexwrappingkey,
         LOGE("No path constructed.");
         return CKR_GENERAL_ERROR;
     }
+
+printhandles(t);
 
     rc = Fapi_CreateSeal(t->fapi.ctx, path,
                          NULL /*type*/, twist_len(hexwrappingkey),
@@ -424,6 +450,8 @@ CK_RV backend_fapi_init_user(token *t, const twist sealdata,
         LOGE("No path constructed.");
         return CKR_GENERAL_ERROR;
     }
+
+printhandles(t);
 
     rc = Fapi_CreateSeal(t->fapi.ctx, path,
                          NULL /*type*/, twist_len(sealdata),

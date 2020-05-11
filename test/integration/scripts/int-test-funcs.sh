@@ -148,8 +148,7 @@ cat > $tempdir/${PROFILE_NAME}.json <<EOF
 {
     "type": "TPM2_ALG_RSA",
     "nameAlg":"TPM2_ALG_SHA256",
-    "srk_template": "system,restricted,decrypt,0x81000001",
-    "srk_persistent": 1,
+    "srk_template": "system,restricted,decrypt",
     "ek_template":  "system,restricted,decrypt",
     "ecc_signing_scheme": {
         "scheme":"TPM2_ALG_ECDSA",
